@@ -77,30 +77,19 @@ def createJobFlow(connections, steps = [], jobRunCfgFile = 'jobrun.cfg'):
     actionFailure = config.get('cluster', 'action_on_failure')
     keepAlive = config.get('cluster', 'keep_alive')
     
-    jobId = connections['emr'].run_jobflow(name = jobName,
-                                      log_uri = logUri,
-                                      ec2_keyname = keyName,
-                                      availability_zone = None,
-                                      master_instance_type = masterInstanceType,
-                                      slave_instance_type = slaveInstanceType,
-                                      num_instances = instancesCount,
-                                      action_on_failure = actionFailure,
-                                      keep_alive = keepAlive,
-                                      enable_debugging = False,
-                                      hadoop_version = '1.0.3',
-                                      steps = steps,
-                                      bootstrap_actions = [],
-                                      instance_groups = None,
-                                      additional_info = None,
-                                      ami_version = None,
-                                      api_params = None,
-                                      visible_to_all_users = None,
-                                      job_flow_role = None)
+    jobId = connections['emr'].run_jobflow(name = jobName, log_uri = logUri, ec2_keyname = keyName, 
+                                           availability_zone = None, master_instance_type = masterInstanceType,
+                                           slave_instance_type = slaveInstanceType, num_instances = instancesCount,
+                                           action_on_failure = actionFailure, keep_alive = keepAlive,
+                                           enable_debugging = False, hadoop_version = '1.0.3', steps = steps,
+                                           bootstrap_actions = [], instance_groups = None, additional_info = None,
+                                           ami_version = None, api_params = None, visible_to_all_users = None,
+                                           job_flow_role = None)
     
     print 'Job logs will be available for the next few days at ' + logUri + '/' + jobId
     return jobId
 
-def displayStepLog(connections, keyValue):
+def getStepLog(connections, keyValue):
     bucket = connections['s3'].get_bucket('emr-script-run-logs')
 
     if not bucket.get_key(keyValue): return
@@ -109,32 +98,40 @@ def displayStepLog(connections, keyValue):
     k.key = keyValue 
     
     content = k.get_contents_as_string()
-    print(content)
-    
+    return content.strip()
+
+def areSame(prevStatus, curStatus):
+    if prevStatus is None: return False
+    if curStatus.state != prevStatus.state: return False
+    if len(curStatus.steps) != len(prevStatus.steps): return False
+    for idx in xrange(len(curStatus.steps)):
+        stepA = prevStatus.steps[idx]
+        stepB = curStatus.steps[idx]
+        if stepA.name != stepB.name or stepA.state != stepB.state: return False
+    return True
 
 def displayStepInfo(connections, jobId, currentStatus, step, stepIdx):
-    stepInfo = ['Name: ', step.name, 'CreationTime: ', step.creationdatetime, 'State: ', step.state]
-    print '\t' + '\t'.join(stepInfo)
+    print '\t' + '\t'.join(['Name: ', step.name, 'CreationTime: ', step.creationdatetime, 'State: ', step.state])
     if step.state in ['FAILED', 'TERMINATED', 'COMPLETED']:
-        print 'STDOUT:\n'
-        displayStepLog(connections, '/'.join([jobId, 'steps', str(stepIdx + 1), 'stdout']))
-        print 'STDERR:\n'
-        displayStepLog(connections, '/'.join([jobId, 'steps', str(stepIdx + 1), 'stderr']))
+        for logType in ['stdout', 'stderr']:
+            logContent = getStepLog(connections, '/'.join([jobId, 'steps', str(stepIdx + 1), logType]))
+            if logContent: print logType + ':\n' + logContent
 
 def displayUsefulInfo(connections, jobId, currentStatus):
-    info = ['JobFLowId: ', jobId, 'Name: ', currentStatus.name, 'State: ', currentStatus.state]
-    print '\t'.join(info)
+    print '\n' + '\t'.join(['JobFLowId: ', jobId, 'Name: ', currentStatus.name, 'State: ', currentStatus.state])
     print 'Steps: '
     for idx in xrange(len(currentStatus.steps)):
-        step = currentStatus.steps[idx]
-        displayStepInfo(connections, jobId, currentStatus, step, idx)
+        displayStepInfo(connections, jobId, currentStatus, currentStatus.steps[idx], idx)
+    print '\n'
 
 def monitorJob(connections, jobId):
     previousStatus = None
     currentStatus = connections['emr'].describe_jobflow(jobId)
     while currentStatus.state not in ['FAILED', 'TERMINATED', 'COMPLETED']:
-        if currentStatus is not previousStatus:
+        if not areSame(previousStatus, currentStatus):
             displayUsefulInfo(connections, jobId, currentStatus)
+        else:
+            print '.',
         previousStatus = currentStatus
         sleep(10)
         currentStatus = connections['emr'].describe_jobflow(jobId)
@@ -144,6 +141,7 @@ if __name__ == '__main__':
     connections['s3'] = connectToS3()
     connections['emr'] = connectToEMR()
     
-    steps = [getHiveSetupStep(), getQueryStep(connections)]
-    jobId = createJobFlow(connections, steps)
+    #steps = [getHiveSetupStep(), getQueryStep(connections)]
+    #jobId = createJobFlow(connections, steps)
+    jobId='j-3EHNOBV8FENWH'
     monitorJob(connections, jobId)
