@@ -100,7 +100,7 @@ def getStepLog(connections, keyValue):
     content = k.get_contents_as_string()
     return content.strip()
 
-def areSame(prevStatus, curStatus):
+def areSame(connections, prevStatus, curStatus, pendingLogs, logsDisplayed):
     if prevStatus is None: return False
     if curStatus.state != prevStatus.state: return False
     if len(curStatus.steps) != len(prevStatus.steps): return False
@@ -108,32 +108,48 @@ def areSame(prevStatus, curStatus):
         stepA = prevStatus.steps[idx]
         stepB = curStatus.steps[idx]
         if stepA.name != stepB.name or stepA.state != stepB.state: return False
+    for pending in [l for l in pendingLogs if l not in logsDisplayed]:
+        if getStepLog(connections, pending): return False
+    
     return True
 
-def displayStepInfo(connections, jobId, currentStatus, step, stepIdx):
+def displayStepInfo(connections, jobId, currentStatus, step, stepIdx, logsDisplayed, pendingLogs):
     print '\t' + '\t'.join(['Name: ', step.name, 'CreationTime: ', step.creationdatetime, 'State: ', step.state])
     if step.state in ['FAILED', 'TERMINATED', 'COMPLETED']:
         for logType in ['stdout', 'stderr']:
-            logContent = getStepLog(connections, '/'.join([jobId, 'steps', str(stepIdx + 1), logType]))
-            if logContent: print logType + ':\n' + logContent
+            keyValue = '/'.join([jobId, 'steps', str(stepIdx + 1), logType])
+            if keyValue in logsDisplayed: continue
+            logContent = getStepLog(connections, keyValue)
+            if logContent: 
+                print logType + ':\n' + logContent
+                logsDisplayed.append(keyValue)
+            else:
+                pendingLogs.append(keyValue)
 
-def displayUsefulInfo(connections, jobId, currentStatus):
+def displayUsefulInfo(connections, jobId, currentStatus, logsDisplayed, pendingLogs):
     print '\n' + '\t'.join(['JobFLowId: ', jobId, 'Name: ', currentStatus.name, 'State: ', currentStatus.state])
     print 'Steps: '
     for idx in xrange(len(currentStatus.steps)):
-        displayStepInfo(connections, jobId, currentStatus, currentStatus.steps[idx], idx)
+        displayStepInfo(connections, jobId, currentStatus, currentStatus.steps[idx], idx, logsDisplayed, pendingLogs)
     print '\n'
 
 def monitorJob(connections, jobId):
     previousStatus = None
     currentStatus = connections['emr'].describe_jobflow(jobId)
+    logsDisplayed = []
+    pendingLogs = []
+    progressDots = 0
     while currentStatus.state not in ['FAILED', 'TERMINATED', 'COMPLETED']:
-        if not areSame(previousStatus, currentStatus):
-            displayUsefulInfo(connections, jobId, currentStatus)
+        if not areSame(connections, previousStatus, currentStatus, pendingLogs, logsDisplayed):
+            displayUsefulInfo(connections, jobId, currentStatus, logsDisplayed, pendingLogs)
         else:
             print '.',
+            progressDots += 1
+            if progressDots == 80:
+                print '\n',
+                progressDots = 0
         previousStatus = currentStatus
-        sleep(10)
+        sleep(5)
         currentStatus = connections['emr'].describe_jobflow(jobId)
 
 if __name__ == '__main__':
@@ -141,7 +157,6 @@ if __name__ == '__main__':
     connections['s3'] = connectToS3()
     connections['emr'] = connectToEMR()
     
-    #steps = [getHiveSetupStep(), getQueryStep(connections)]
-    #jobId = createJobFlow(connections, steps)
-    jobId='j-3EHNOBV8FENWH'
+    steps = [getHiveSetupStep(), getQueryStep(connections)]
+    jobId = createJobFlow(connections, steps)
     monitorJob(connections, jobId)
